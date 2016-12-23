@@ -472,10 +472,9 @@ have_event:
 	case NOTYPE:
 		break;
 	case DRAG:
-		if (c->tty.mouse_drag_update != NULL) {
-			c->tty.mouse_drag_update(c, m);
-			key = KEYC_MOUSE;
-		} else {
+		if (c->tty.mouse_drag_update != NULL)
+			key = KEYC_DRAGGING;
+		else {
 			switch (MOUSE_BUTTONS(b)) {
 			case 0:
 				if (where == PANE)
@@ -728,6 +727,7 @@ server_client_handle_key(struct client *c, key_code key)
 	}
 
 	/* Check for mouse keys. */
+	m->valid = 0;
 	if (key == KEYC_MOUSE) {
 		if (c->flags & CLIENT_READONLY)
 			return;
@@ -739,11 +739,13 @@ server_client_handle_key(struct client *c, key_code key)
 		m->key = key;
 
 		/*
-		 * A mouse event that continues to be valid but that we do not
-		 * want to pass through.
+		 * Mouse drag is in progress, so fire the callback (now that
+		 * the mouse event is valid).
 		 */
-		if (key == KEYC_MOUSE)
+		if (key == KEYC_DRAGGING) {
+			c->tty.mouse_drag_update(c, m);
 			return;
+		}
 	} else
 		m->valid = 0;
 
@@ -777,6 +779,18 @@ retry:
 		log_debug("key table %s (no pane)", table->name);
 	else
 		log_debug("key table %s (pane %%%u)", table->name, wp->id);
+
+	/*
+	 * The prefix always takes precedence and forces a switch to the prefix
+	 * table, unless we are already there.
+	 */
+	if ((key == (key_code)options_get_number(s->options, "prefix") ||
+	    key == (key_code)options_get_number(s->options, "prefix2")) &&
+	    strcmp(table->name, "prefix") != 0) {
+		server_client_set_key_table(c, "prefix");
+		server_status_client(c);
+		return;
+	}
 
 	/* Try to see if there is a key binding in the current table. */
 	bd_find.key = key;
@@ -850,18 +864,8 @@ retry:
 
 	/* If no match and we're not in the root table, that's it. */
 	if (name == NULL && !server_client_is_default_key_table(c)) {
+		log_debug("no key in key table %s", table->name);
 		server_client_set_key_table(c, NULL);
-		server_status_client(c);
-		return;
-	}
-
-	/*
-	 * No match, but in the root table. Prefix switches to the prefix table
-	 * and everything else is passed through.
-	 */
-	if (key == (key_code)options_get_number(s->options, "prefix") ||
-	    key == (key_code)options_get_number(s->options, "prefix2")) {
-		server_client_set_key_table(c, "prefix");
 		server_status_client(c);
 		return;
 	}
